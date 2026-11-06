@@ -69,6 +69,9 @@
   .sb-add{background:var(--accent);color:#fff;border:none;border-radius:8px;width:36px;height:36px;cursor:pointer;font-size:1.1rem;line-height:1;flex-shrink:0}
   .sb-add:hover{background:var(--accent-h)}
   .sb-list{overflow-y:auto;flex:1;padding:0 6px 12px}
+  .sb-foot{display:flex;gap:6px;padding:8px 10px 10px;border-top:1px solid var(--border)}
+  .sb-foot button{flex:1;background:var(--surface2);border:1.5px solid var(--border);border-radius:9px;color:var(--text2);cursor:pointer;padding:7px 4px;font-size:.76rem}
+  .sb-foot button:hover{background:var(--accent-soft);color:var(--accent)}
   .sb-item{display:flex;align-items:center;gap:6px;padding:9px 10px;border-radius:8px;cursor:pointer;font-size:0.88rem;color:var(--text);transition:background .15s;margin-bottom:2px}
   .sb-item:hover{background:var(--surface2)}
   .sb-item.active{background:var(--accent);color:#fff}
@@ -222,6 +225,11 @@
       <button class="sb-dir" id="sort-dir" onclick="toggleSortDir()"></button>
     </div>
     <div class="sb-list" id="sb-list"></div>
+    <div class="sb-foot">
+      <button id="btn-backup" onclick="backupFile()"></button>
+      <button id="btn-restore" onclick="document.getElementById('restore-file').click()"></button>
+      <input type="file" id="restore-file" accept=".json,application/json" hidden onchange="restoreFile(this)">
+    </div>
   </div>
 
   <div class="main">
@@ -299,6 +307,8 @@ const L = {
     confirmDel:'Delete list for "{d}"?',
     sortDate:'📅 Date',sortAdded:'🕒 Added',newestFirst:'Newest first',oldestFirst:'Oldest first',
     addedToday:'Added today',addedYesterday:'Added yesterday',addedOn:'Added {d}',
+    backup:'💾 Backup',restore:'📥 Restore',restoreBad:'Not a valid backup file',
+    restoreAsk:'Replace your {n} lists here with the {m} lists from the backup?',restored:'Restored {m} lists',
   },
   he:{
     appTitle:'מעקב קבצים',lists:'רשימות',noList:'בחר תאריך ולחץ + ליצירת רשימה',
@@ -318,6 +328,8 @@ const L = {
     confirmDel:'למחוק את הרשימה "{d}"?',
     sortDate:'📅 תאריך',sortAdded:'🕒 נוספו',newestFirst:'החדש ביותר קודם',oldestFirst:'הישן ביותר קודם',
     addedToday:'נוספו היום',addedYesterday:'נוספו אתמול',addedOn:'נוספו בתאריך {d}',
+    backup:'💾 גיבוי',restore:'📥 שחזור',restoreBad:'קובץ גיבוי לא תקין',
+    restoreAsk:'להחליף את {n} הרשימות כאן ב-{m} הרשימות מהגיבוי?',restored:'שוחזרו {m} רשימות',
   }
 };
 // t('key', {var:value}) fills {var} placeholders
@@ -357,8 +369,75 @@ function dedupeLists(){
   return removed;
 }
 
+// ── BACKUP / RESTORE ──────────────────────────────────────────────────────────
+// Data lives only in this browser, under this site's address. Backup files keep it safe
+// across address changes, new phones and cleared browsers.
+function backupFile(){
+  const data={kind:'file-tracker-backup',exported:new Date().toISOString(),localStorage:{ft_v3:JSON.stringify(S)}};
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`file-tracker-${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+// Accepts this app's backup, a rescue.html full backup, or a bare saved state
+function stateFromBackup(data){
+  let st=data;
+  if(data&&data.localStorage) st=JSON.parse(data.localStorage.ft_v3);
+  if(!st||typeof st.lists!=='object'||!st.lists) throw new Error('bad');
+  return st;
+}
+// Swap in a restored state; the old one is kept in memory for Undo and in storage as ft_v3.before-restore
+function applyRestored(st,ask){
+  const n=Object.keys(S.lists).length, m=Object.keys(st.lists).length;
+  if(ask&&n&&!confirm(t('restoreAsk',{n,m}))) return false;
+  const prev=JSON.stringify(S);
+  if(n) localStorage.setItem('ft_v3.before-restore',prev);
+  S=st;
+  if(!S.sort) S.sort={ by:'date', dir:'desc' };
+  if(!S.lists[S.active]) S.active=null;
+  save();
+  return prev;
+}
+function restoreFile(input){
+  const f=input.files[0]; input.value='';
+  if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{
+    let st;
+    try{ st=stateFromBackup(JSON.parse(r.result)); }catch(e){ toast(t('restoreBad')); return; }
+    const prev=applyRestored(st,true);
+    if(prev===false) return;
+    rerenderAll();
+    toast(t('restored',{m:Object.keys(S.lists).length}),()=>{ S=JSON.parse(prev); save(); rerenderAll(); });
+  };
+  r.readAsText(f);
+}
+function rerenderAll(){
+  document.body.classList.toggle('dark',S.dark);
+  applyLang(); renderSidebar();
+  if(S.active&&S.lists[S.active]) openList(S.active); else showNoList();
+}
+// rescue.html (hosted on the old site address) sends the old data here in the URL hash:
+// #restore=<base64url JSON {kind:'storage-transfer', keys:{ft_v3: rawString}}>. Never sent to the server.
+function restoreFromHash(){
+  const m=location.hash.match(/^#restore=([A-Za-z0-9_-]+)$/);
+  if(!m) return false;
+  history.replaceState(null,'',location.pathname+location.search);
+  let st;
+  try{
+    const bytes=Uint8Array.from(atob(m[1].replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
+    const data=JSON.parse(new TextDecoder().decode(bytes));
+    st=JSON.parse(data.keys.ft_v3);
+    if(!st||typeof st.lists!=='object') throw new Error('bad');
+  }catch(e){ alert('Restore link is damaged / קישור השחזור פגום'); return false; }
+  return applyRestored(st,true)!==false;
+}
+
 // ── BOOT ──────────────────────────────────────────────────────────────────────
 load();
+const _restored=restoreFromHash();
 if(!S.sort) S.sort={ by:'date', dir:'desc' };
 const _dedup=dedupeLists();
 if(_dedup) save();
@@ -383,7 +462,8 @@ applyLang();
 renderSidebar();
 if(S.active && S.lists[S.active]) openList(S.active);
 else showNoList();
-if(_dedup) toast(t('dedup',{n:_dedup}));
+if(_restored) toast(t('restored',{m:Object.keys(S.lists).length}));
+else if(_dedup) toast(t('dedup',{n:_dedup}));
 
 // ── SIDEBAR TOGGLE ────────────────────────────────────────────────────────────
 function toggleSidebar(){
@@ -451,6 +531,8 @@ function addedLabel(ms){
 
 function renderSidebar(){
   document.getElementById('lbl-lists').textContent=t('lists');
+  document.getElementById('btn-backup').textContent=t('backup');
+  document.getElementById('btn-restore').textContent=t('restore');
   const sd=document.getElementById('sort-date'), sa=document.getElementById('sort-added'), dir=document.getElementById('sort-dir');
   sd.textContent=t('sortDate'); sa.textContent=t('sortAdded');
   sd.classList.toggle('on',S.sort.by==='date'); sa.classList.toggle('on',S.sort.by==='added');

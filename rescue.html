@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Rescue / שחזור נתונים</title>
+<!--
+  Data rescue page.
+  Browser storage (localStorage) belongs to a site's *origin* (e.g. https://poh-rull.github.io),
+  not to a repository. After a GitHub username change the apps move to a new origin and start
+  empty, while the old data is still sitting in the browser under the old origin.
+  Any page served from the OLD origin can read it, so host this file there
+  (repo "poh-rull.github.io" on an account named PoH-rull) and open it in the same browser.
+  It only reads storage. It never deletes or changes anything.
+-->
+<style>
+  :root{--bg:#f0f2f5;--card:#fff;--text:#1a1a2e;--muted:#666;--accent:#4f46e5;--green:#059669;--border:#e2e5ef}
+  @media (prefers-color-scheme:dark){:root{--bg:#0f1117;--card:#1a1d27;--text:#e8eaf6;--muted:#9ea3c0;--accent:#818cf8;--green:#10b981;--border:#2e3248}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:16px}
+  main{max-width:560px;margin:0 auto}
+  h1{font-size:1.4rem;margin:8px 0 4px}
+  p{margin:6px 0;color:var(--muted)}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;margin:14px 0}
+  .card h2{font-size:1.1rem;margin:0 0 6px}
+  .n{font-weight:700;color:var(--text)}
+  button{display:block;width:100%;border:0;border-radius:10px;padding:13px;margin-top:10px;font:inherit;font-weight:600;cursor:pointer;color:#fff;background:var(--accent)}
+  button.dl{background:var(--green)}
+  button:disabled{opacity:.4;cursor:default}
+  .ok{color:var(--green);font-weight:600}
+  code{font-size:.85em;word-break:break-all}
+</style>
+</head>
+<body>
+<main>
+  <h1>🛟 שחזור נתונים · Data rescue</h1>
+  <p>הדף רק קורא את הנתונים שנשמרו בדפדפן הזה בכתובת הישנה. הוא לא מוחק ולא משנה כלום.</p>
+  <p>This page only reads the data saved in this browser at the old address. It never deletes or changes anything.</p>
+  <p>Origin: <code id="origin"></code></p>
+
+  <div class="card">
+    <h2>⬇️ 1. גיבוי מלא לקובץ · Full backup file</h2>
+    <p>תעשה את זה קודם, בכל מקרה. · Do this first, no matter what.</p>
+    <p>Keys found: <span class="n" id="nkeys">0</span></p>
+    <button class="dl" id="dl">💾 הורד גיבוי · Download backup (.json)</button>
+    <p id="dl-ok" class="ok" hidden>✅ Saved. Keep this file.</p>
+  </div>
+
+  <div class="card">
+    <h2>🎒 2. ציוד בבסיס · Base list</h2>
+    <p>Items found: <span class="n" id="nbase">0</span></p>
+    <button id="go-base">➡️ העבר לכתובת החדשה · Move to new site</button>
+  </div>
+
+  <div class="card">
+    <h2>📋 3. מעקב קבצים · File tracker</h2>
+    <p>Date lists found: <span class="n" id="nft">0</span></p>
+    <button id="go-ft">➡️ העבר לכתובת החדשה · Move to new site</button>
+  </div>
+</main>
+
+<script>
+'use strict';
+const NEW_ORIGIN = 'https://arcdemonx.github.io';
+const APPS = {
+  base: { path: '/base_list/',    owns: k => k.startsWith('base-inv') || k.startsWith('base-inventory') },
+  ft:   { path: '/file_tracker/', owns: k => k.startsWith('ft_') },
+};
+
+// Snapshot every key as its raw string, exactly as the apps stored it.
+const all = {};
+for (let i = 0; i < localStorage.length; i++) {
+  const k = localStorage.key(i);
+  all[k] = localStorage.getItem(k);
+}
+const pick = owns => Object.fromEntries(Object.entries(all).filter(([k]) => owns(k)));
+const parse = s => { try { return JSON.parse(s); } catch { return null; } };
+
+// UTF-8 safe base64url, so Hebrew text survives the trip through the URL
+function toB64url(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+document.getElementById('origin').textContent = location.origin;
+document.getElementById('nkeys').textContent = Object.keys(all).length;
+
+const baseKeys = pick(APPS.base.owns);
+const baseItems = parse(baseKeys['base-inv-v6']) || parse(baseKeys['base-inv-v5']) || parse(baseKeys['base-inventory-v5']) || parse(baseKeys['base-inventory-v4']) || [];
+document.getElementById('nbase').textContent = Array.isArray(baseItems) ? baseItems.length : 0;
+
+const ftKeys = pick(APPS.ft.owns);
+const ft = parse(ftKeys['ft_v3']);
+document.getElementById('nft').textContent = ft && ft.lists ? Object.keys(ft.lists).length : 0;
+
+document.getElementById('go-base').disabled = !Object.keys(baseKeys).length;
+document.getElementById('go-ft').disabled = !Object.keys(ftKeys).length;
+
+document.getElementById('dl').onclick = () => {
+  const data = { kind: 'storage-rescue', from: location.origin, exported: new Date().toISOString(), localStorage: all };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `rescue-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  document.getElementById('dl-ok').hidden = false;
+};
+
+// The data rides in the #hash, which browsers never send to the server.
+function go(app, keys) {
+  const payload = toB64url(JSON.stringify({ kind: 'storage-transfer', keys }));
+  location.href = NEW_ORIGIN + app.path + '#restore=' + payload;
+}
+document.getElementById('go-base').onclick = () => go(APPS.base, baseKeys);
+document.getElementById('go-ft').onclick = () => go(APPS.ft, ftKeys);
+</script>
+</body>
+</html>
